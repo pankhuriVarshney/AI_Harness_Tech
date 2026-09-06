@@ -1,0 +1,51 @@
+{
+  "injection_patterns": [
+    "ignore .{0,40}instructions?",
+    "disregard .{0,40}instructions?",
+    "forget .{0,40}instructions?",
+    "system prompt",
+    "you are now",
+    "you will now",
+    "new (personality|role|mode)",
+    "developer mode",
+    "jail ?break",
+    "DAN mode",
+    "do anything now",
+    "repeat (everything|all|the text) (above|you|written)",
+    "print (your|the) (system )?prompt",
+    "base64[: ]"
+  ],
+  "restricted_topics": {
+    "warranty": [
+      "warranty",
+      "warrant"
+    ],
+    "legal": [
+      "legal",
+      "lawsuit",
+      "sue",
+      "liability",
+      "entitled",
+      "law"
+    ],
+    "safety": [
+      "injury",
+      "injured",
+      "hurt",
+      "accident",
+      "burst",
+      "blew out",
+      "exploded"
+    ],
+    "recall": [
+      "recall",
+      "defect",
+      "defective"
+    ]
+  },
+  "pii_patterns": {
+    "email": "[\\w.+-]+@[\\w-]+\\.[\\w.]+",
+    "phone_in": "(?:\\+?91[\\s-]?)?[6-9]\\d{4}[\\s-]?\\d{5}",
+    "api_key": "(?i)(api[_-]?key|secret|token|bearer)\\s*[:=]\\s*['\"]?[\\w\\-]{16,}"
+  }
+}
