@@ -1,8 +1,0 @@
-{
-  "distributors": [
-    {"name": "Michelin Hub - Pimpri", "city": "Pimpri-Chinchwad", "lat": 18.6298, "lng": 73.7997, "phone": "020-2222-0001", "stock": ["MI-PS5-205-55R16", "MI-PRIM4-195-55R16", "MI-CROSSCLIMATE2-205-60R16"]},
-    {"name": "Michelin Hub - Baner", "city": "Pune", "lat": 18.5590, "lng": 73.7868, "phone": "020-2222-0002", "stock": ["MI-PILOT4S-245-40R18", "MI-LTX-FORCE-235-65R17", "MI-PRIM4-205-65R16"]},
-    {"name": "Michelin Hub - Hadapsar", "city": "Pune", "lat": 18.5089, "lng": 73.9260, "phone": "020-2222-0003", "stock": ["MI-ENERGY-XM2-165-80R14", "MI-AGILIS-195-70R15C", "MI-LTX-TRAIL-265-70R16"]},
-    {"name": "Michelin Hub - Mumbai Andheri", "city": "Mumbai", "lat": 19.1197, "lng": 72.8468, "phone": "022-2222-0004", "stock": ["MI-PS5-225-45R17", "MI-PRIM4-185-65R15", "MI-ENERGY-XM2-175-70R14"]}
-  ]
-}
