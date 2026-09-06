@@ -72,8 +72,9 @@ def run(raw_text: str, ctx: dict = None) -> dict:
         result["confidence"] = 0.0
 
     result["needs_clarification"] = (
-        result["confidence"] < LOW_CONFIDENCE_THRESHOLD or len(result["missing_fields"]) > 0
+        result["confidence"] < LOW_CONFIDENCE_THRESHOLD or len(missing) > 0  # use `missing`, not result["missing_fields"]
     ) and not result.get("is_out_of_scope")
+        
     result["security_flags"] = scan["flags"]
     return result
 

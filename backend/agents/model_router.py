@@ -24,15 +24,15 @@ from agents import gemini_client
 ROUTE_TABLE = {
     "fast": {
         "env": "GEMINI_MODEL_FAST",
-        "default": "gemini-2.0-flash",
+        "default": "gemini-3.6-flash",
         "fallback_env": "GEMINI_MODEL_FAST_FALLBACK",
-        "fallback_default": "gemini-2.0-flash",
+        "fallback_default": "gemini-3.6-flash",
     },
     "reasoning": {
         "env": "GEMINI_MODEL_REASONING",
-        "default": "gemini-2.0-flash",  # set to a Pro model in .env for production
+        "default": "gemini-3.6-flash",  # set to a Pro model in .env for production
         "fallback_env": "GEMINI_MODEL_FAST",
-        "fallback_default": "gemini-2.0-flash",
+        "fallback_default": "gemini-3.6-flash",
     },
 }
 
@@ -99,6 +99,7 @@ def call_json(system_prompt: str, user_prompt: str, tier: str = "fast", lead_id=
         except Exception as exc:  # noqa: BLE001 - routing must survive anything
             _record_failure()
             last = str(exc)
+            print(f"[model_router] model={model_name!r} tier={tier!r} FAILED: {last}", flush=True)  # ADD THIS
             if i == 0:
                 continue
             return {"_error": last, "_model_used": model_name, "_model_tier": tier}
