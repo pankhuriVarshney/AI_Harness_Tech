@@ -1,54 +1,78 @@
-from agents.gemini_client import call_gemini_json
-from agents import prompts
+from agents import hooks, negotiation, prompts
+from agents.tools import invoke_tool
 
 
-def run(price: float, profile: dict, policy: dict) -> dict:
-    max_discount = policy["max_discount_pct"]
+def run(price: float, profile: dict, policy: dict, ctx: dict = None,
+        negotiation_feedback: str = None, _spawn_depth: int = 0) -> dict:
+    ctx = ctx or {}
     budget = profile.get("budget")
-    requested_discount_pct = profile.get("requested_discount_pct")
+    requested = profile.get("requested_discount_pct")
     wants_four = profile.get("wants_four_tyres", False)
 
-    user_prompt = prompts.DEAL_OPTIMIZATION_USER_TEMPLATE.format(
-        price=price,
-        budget=budget,
-        requested_discount_pct=requested_discount_pct,
-        max_discount_pct=max_discount,
-        wants_four_tyres=wants_four,
-        purchase_intent=profile.get("purchase_intent"),
+    cap = invoke_tool("policy.effective_max_discount", "deal_optimization",
+                      {"policy": policy, "wants_four": wants_four},
+                      trace=ctx.get("trace"))["result"]["max_pct"]
+
+    tool_manifest = json_manifest()
+    result = hooks.guarded_call(
+        "deal_optimization", prompts.DEAL_OPTIMIZATION_USER_TEMPLATE, ctx=ctx,
+        payloads={"price": price, "budget": budget, "requested_discount_pct": requested,
+                  "max_discount_pct": cap, "wants_four_tyres": wants_four,
+                  "purchase_intent": profile.get("purchase_intent"),
+                  "negotiation_feedback": negotiation_feedback or prompts.NEGOTIATION_FEEDBACK_NONE},
+        system_prompt=prompts.DEAL_OPTIMIZATION_SYSTEM.format(tool_manifest=tool_manifest),
     )
-    result = call_gemini_json(prompts.DEAL_OPTIMIZATION_SYSTEM, user_prompt)
 
     proposed = result.get("recommended_discount_pct")
     reason = result.get("reason")
     if "_error" in result or not isinstance(proposed, (int, float)):
-        # Deterministic fallback: aim for the smallest discount that reaches
-        # the stated budget, never exceeding policy.
+        # Deterministic fallback: smallest discount estimated to reach budget.
         if budget and budget < price:
-            needed_pct = round((1 - budget / price) * 100)
-            proposed = max(0, needed_pct)
+            proposed = max(0, round((1 - budget / price) * 100))
         else:
             proposed = 0
         reason = "Deterministic fallback: smallest discount estimated to approach stated budget."
 
-    effective_policy_max = max_discount + (
-        policy.get("bundle_rules", {}).get("four_tyres", {}).get("additional_discount_pct", 0)
-        if wants_four else 0
-    )
+    # --- Deterministic guardrail: policy.clamp_discount tool has final say ---
+    clamp = invoke_tool("policy.clamp_discount", "deal_optimization",
+                        {"proposed_pct": proposed, "requested_pct": requested,
+                         "policy": policy, "wants_four": wants_four},
+                        trace=ctx.get("trace"))["result"]
 
-    # --- Deterministic guardrail: LLM never has the final say on the number ---
-    exceeds_policy = bool(requested_discount_pct and requested_discount_pct > effective_policy_max)
-    recommended_discount_pct = max(0, min(round(proposed), effective_policy_max))
+    quote = invoke_tool("quote.finalize", "deal_optimization",
+                        {"price": price, "discount_pct": clamp["clamped_discount_pct"],
+                         "policy": policy, "wants_four": wants_four},
+                        trace=ctx.get("trace"))["result"]
 
-    final_total = round(price * (1 - recommended_discount_pct / 100))
+    # --- Spawn negotiation subagent (depth-limited, registry-gated) ---
+    subagent_out = None
+    if _spawn_depth < 1:
+        subagent_out = negotiation.run(price, clamp["clamped_discount_pct"], profile, cap, ctx)
+        ctx.setdefault("hook_events", []).append({
+            "stage": "orchestration", "event": "subagent_spawn",
+            "parent": "deal_optimization", "child": "negotiation",
+            "depth": _spawn_depth + 1,
+            "customer_accepts": subagent_out.get("customer_accepts")})
 
     return {
         "original_price": price,
-        "requested_discount_pct": requested_discount_pct,
-        "recommended_discount_pct": recommended_discount_pct,
-        "policy_max_discount_pct": effective_policy_max,
-        "final_total": final_total,
-        "exceeds_policy": exceeds_policy,
+        "requested_discount_pct": requested,
+        "recommended_discount_pct": clamp["clamped_discount_pct"],
+        "policy_max_discount_pct": clamp["policy_cap_pct"],
+        "final_total": quote["final_total"],
+        "exceeds_policy": clamp["exceeds_policy"],
+        "was_clamped": clamp["was_clamped"],
         "reason": reason,
-        # Hard-coded by code, never left to the model's wording:
-        "disclaimer": policy.get("quote_disclaimer", "Subject to distributor confirmation."),
+        "disclaimer": quote["disclaimer"],
+        "negotiation": subagent_out,
+        "subagent_spawned": subagent_out is not None,
     }
+
+
+def json_manifest():
+    import json
+    return json.dumps([
+        {"name": "policy.effective_max_discount", "when": "the real ceiling incl. bundle bonus"},
+        {"name": "policy.clamp_discount", "when": "final say on any proposed pct"},
+        {"name": "quote.finalize", "when": "totals + mandatory disclaimer"},
+    ])

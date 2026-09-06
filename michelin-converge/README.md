@@ -1,152 +1,122 @@
-# Michelin Converge — Agentic Lead-to-Dealer Conversion Harness
+# Michelin Converge v2 — Agentic Lead-to-Dealer Conversion Harness
 
-An agentic AI system that turns a raw customer tyre lead into a validated
-sales decision: a lead score, a real product recommendation, a
-policy-compliant offer, a dealer assignment, and a next action — or a clean
-hand-off to a human when it can't safely decide. Runs on the **Gemini API**
-(works with a free/college Gemini API key from Google AI Studio).
+An agentic AI harness that turns a raw, messy (possibly hostile) customer
+lead into a validated, policy-compliant sales action — scored, matched,
+priced within policy, dealer-allocated, independently reviewed, and, when
+anything is off, cleanly escalated to a human.
 
-This is **not a chatbot**. It's a decision harness: LLM agents reason about
-the messy parts, and deterministic Python code enforces every business rule
-(catalogue validity, discount ceilings, dealer inventory, restricted
-topics) so the model can never talk its way around a policy.
+**v2 is a harness-engineering upgrade, not a feature upgrade.** The business
+flow is the same; everything around the LLM calls is now real harness
+machinery: a tool/skill registry (MCP-style), model routing with fallback
+chains and circuit breakers, a hook pipeline (compaction / lint-repair /
+security sentinel), subagent spawning, bounded handoff loops, and a
+multi-layer security harness. See `docs/HARNESS.md` for the full tour.
 
 ---
 
-## 1. What's in this repo
+## 1. Repo layout
 
 ```text
 michelin-converge/
 ├── agents/
-│   ├── gemini_client.py       # Gemini API wrapper (JSON-only calls, retries)
-│   ├── prompts.py             # every prompt used, in one place
-│   ├── lead_intelligence.py   # Agent 1
-│   ├── lead_scoring.py        # Agent 2 (deterministic rubric + LLM narrative)
-│   ├── product_matching.py    # Agent 3 (+ deterministic SKU validator/fallback)
-│   ├── deal_optimization.py   # Agent 4 (+ deterministic discount clamp)
-│   ├── dealer_allocation.py   # Agent 5 (fully deterministic)
-│   ├── compliance_critic.py   # Agent 6 (independent review + hard overrides)
-│   └── orchestrator.py        # branching control layer + execution trace
+│   ├── gemini_client.py     # low-level Gemini transport (JSON extraction)
+│   ├── model_router.py      # MODEL ROUTING: tiers, fallback chain, per-lead
+│   │                        # call budget, circuit breaker
+│   ├── tools.py             # TOOLS/SKILLS REGISTRY (MCP-style, in-process)
+│   ├── registry.py          # AGENT REGISTRY: roles, permissions, output
+│   │                        # schemas, spawn/handoff rights, model route
+│   ├── hooks.py             # HOOK PIPELINE: compaction, lint+repair,
+│   │                        # Layer-2 security sentinel
+│   ├── security.py          # SECURITY HARNESS Layer 1 (deterministic veto)
+│   ├── prompts.py           # versioned system prompts (PROMPT_VERSION)
+│   ├── lead_intelligence.py
+│   ├── lead_scoring.py
+│   ├── product_matching.py
+│   ├── deal_optimization.py # spawns negotiation subagent
+│   ├── negotiation.py       # SUBAGENT: customer-acceptance simulator
+│   ├── dealer_allocation.py # deterministic, tool-backed
+│   ├── compliance_critic.py # independent review + hard vetoes + handoffs
+│   └── orchestrator.py      # ORCHESTRATION: state, branching, subagents,
+│                            # handoffs, graceful degradation
 ├── data/
-│   ├── catalog.json           # 12 demo Michelin SKUs
-│   ├── policy.json            # discount policy + restricted topics
-│   ├── distributors.json      # 4 demo dealers with stock/location/conversion
-│   └── leads.json             # 5 demo leads covering the edge cases below
-├── static/                    # placeholder dashboard (HTML/CSS/JS)
+│   ├── catalog.json / policy.json / distributors.json / leads.json
+│   └── security_policy.json  # data-driven injection/PII rules (swappable)
 ├── docs/
-│   ├── PROMPTS.md             # human-readable explanation of every prompt
-│   └── UI_CONNECTORS.md       # API contracts + how to plug in your Figma UI
-├── app.py                     # Flask app / REST API
+│   ├── HARNESS.md            # the harness-engineering deep dive
+│   ├── SECURITY.md           # threat model + security demo script
+│   ├── PROMPTS.md            # prompt rationale (updated for v2)
+│   └── UI_CONNECTORS.md
+├── static/                   # debug/demo dashboard (unchanged from v1)
+├── app.py                    # REST API + middleware (rate limit, headers)
 ├── requirements.txt
 └── .env.example
 ```
 
-## 2. Setup (5 minutes)
+## 2. What's new in v2 (harness technicalities)
 
-1. **Get a Gemini API key.** If your college subscription gives you access
-   to Google AI Studio (https://aistudio.google.com/apikey), generate a key
-   there. Any key that works with `google-generativeai` will work here.
+| Harness component | Where | What it does |
+| --- | --- | --- |
+| **System prompts (versioned)** | `agents/prompts.py` | One `PROMPT_VERSION` bundle; every trace records which version produced a decision |
+| **Tools / Skills / MCP-style manifest** | `agents/tools.py` | 12 tools with descriptions + JSON schemas + role-based permissions; agents receive a manifest of what they may call; all invocation is validated and traced |
+| **Bundled infrastructure** | `data/`, in-process | Filesystem-backed data plane (JSON), sandboxed tool execution (in-process, schema-validated), no external network besides Gemini |
+| **Orchestration logic** | `agents/orchestrator.py`, `registry.py` | Branching (not a fixed pipeline), **subagent spawning** (deal → negotiation, depth 1), **handoffs** (compliance → deal revision, max 1 loop), retry counters |
+| **Model routing** | `agents/model_router.py` | `fast` vs `reasoning` tiers, env-configurable, **fallback chain**, **per-lead call budget**, **circuit breaker** with cooldown |
+| **Hooks / middleware** | `agents/hooks.py` | **Compaction** (3 leveled strategies when prompt exceeds budget), **lint checks** (schema validation of every model output), **deterministic repair** (coercion / enum snapping / clamping), **continuation notes** to the model after compaction |
+| **Security harness (MUST)** | `agents/security.py`, `hooks.py`, `app.py` | Layer-1 deterministic scan (injection + restricted topics + obfuscated payloads), PII redaction with reversible tokens, Layer-2 LLM sentinel (can escalate, never un-block), output exfil guard, rate limiting, security headers, request size caps |
+| **Observability** | trace + `GET /api/harness/manifest` + `GET /api/harness/router-stats` | Every agent step, tool call, hook event, model used, and security flag is recorded and demoable |
 
-2. **Install dependencies**
+## 3. Setup
 
-   ```bash
-   cd michelin-converge
-   python -m venv venv
-   source venv/bin/activate        # Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-
-3. **Configure your key**
-
-   ```bash
-   cp .env.example .env
-   ```
-
-   Then edit `.env`:
-
-   ```env
-   GEMINI_API_KEY=your_real_key_here
-   GEMINI_MODEL=gemini-2.0-flash
-   ```
-
-   The key is only ever read from the environment — it is never hardcoded
-   anywhere in the codebase, and `.env` is meant to stay out of git.
-
-4. **Run it**
-
-   ```bash
-   python app.py
-   ```
-
-   Open http://localhost:5000 — you'll see the demo dashboard. It talks to
-   the same REST API documented in `docs/UI_CONNECTORS.md`, which is what
-   you'll point your Figma-based UI at later.
-
-## 3. How a lead flows through the harness
-
-```text
-raw lead text
-   → Lead Intelligence Agent      (structured profile, confidence, out-of-scope flag)
-   → Lead Scoring Agent           (deterministic 0-100 score + LLM-written reasons)
-   → Product Matching Agent       (LLM picks a SKU → code validates it's real)
-   → Deal Optimization Agent      (LLM proposes a discount → code clamps to policy)
-   → Dealer Allocation Agent      (fully deterministic: stock → distance → conversion)
-   → Compliance & Sales Critic    (independent LLM review + hard-coded overrides)
-   → Orchestrator decision        (CONTACT_NOW / FOLLOW_UP / NURTURE / HUMAN_REVIEW)
+```bash
+cd michelin-converge
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # add your GEMINI_API_KEY
+python app.py          # http://localhost:5000
 ```
 
-The **Orchestrator** (`agents/orchestrator.py`) doesn't run agents in a
-blind fixed sequence — it branches on what each agent returns:
+No new dependencies vs v1 — all harness machinery is stdlib Python.
 
-- Low-confidence or missing lead info → stops immediately, asks for more
-  info, never guesses.
-- Out-of-scope (warranty/legal/safety) → skips straight to human review;
-  no agent tries to answer the substantive question.
-- No catalogue match → retries once, then escalates to a human.
-- Discount above policy → clamped in code, flagged, and independently
-  re-checked by the Compliance Critic.
-- Hallucinated SKU → deterministically rejected and replaced with a
-  rule-based catalogue match; the trace shows this happened.
+## 4. Demo leads (incl. 2 new security leads)
 
-Every run produces a full **execution trace** (`GET /api/leads/<id>/trace`)
-showing which agents ran, how long each took, and what they returned — so a
-demo can prove the result came from the harness, not a single hidden model
-call.
+| Lead | Demonstrates |
+| --- | --- |
+| `LEAD-104` Rahul, Creta, highway, ₹30k | Happy path → `CONTACT_NOW` (now with negotiation subagent in trace) |
+| `LEAD-201` "30% off if I buy all four" | Over-policy discount → clamped by `policy.clamp_discount` tool + escalation |
+| `LEAD-302` size not in catalogue | No match → retry → human escalation |
+| `LEAD-403` "legally entitled to replacement?" | Out-of-scope warranty/legal → human review, never answered |
+| `LEAD-501` "need tyres" | Missing info → clarification, no guessing |
+| **`LEAD-606` prompt-injection attempt** | **Security harness blocks before any model call; `SECURITY_BLOCK` status** |
+| **`LEAD-707` lead containing phone + email** | **PII redaction: model sees `<PHONE_1>`, `<EMAIL_1>`; raw PII never leaves the server** |
 
-## 4. Deterministic guardrails (what code enforces, not the model)
+Force the hallucination demo as in v1: hardcode a fake SKU in
+`agents/product_matching.py` and watch `catalog.validate_skus` reject it.
 
-| Rule | Enforced in |
-|---|---|
-| Recommended SKU must exist in the catalogue | `product_matching.py` |
-| Discount can never exceed policy maximum | `deal_optimization.py` |
-| Every quote carries the distributor-confirmation disclaimer | `deal_optimization.py` |
-| Dealer must actually stock the SKU / exist in the distributor list | `dealer_allocation.py` |
-| Warranty/legal/safety/recall topics always escalate | `compliance_critic.py` (keyword pre-check, cannot be overridden by the LLM) |
-| A policy violation the code detects cannot be "approved away" by the critic LLM | `compliance_critic.py` |
-| No raw exception/model failure ever reaches the frontend | `app.py` (`_error_response`, try/except around orchestrator) |
+New observability calls for the demo:
 
-## 5. Demo script (edge cases included in `data/leads.json`)
+- `GET /api/harness/manifest` — agents, tools, routes, prompt version
+- `GET /api/harness/router-stats` — call budget usage, circuit breaker state
+- `GET /api/leads/<id>/trace` — now also returns `tool_calls` and per-step `hook_events`
 
-| Lead | What it demonstrates |
-|---|---|
-| `LEAD-104` — Rahul, Hyundai Creta, highway, ₹30k, Pune | Normal path → `CONTACT_NOW` |
-| `LEAD-201` — "give me 30% off if I buy all four" | Over-policy discount → clamped + escalated |
-| `LEAD-302` — tyre size not in catalogue | No match → retry → human escalation |
-| `LEAD-403` — "am I legally entitled to a replacement?" | Out-of-scope warranty/legal → human review, no answer given |
-| `LEAD-501` — "need tyres" (nothing else) | Missing info → clarification requested, no guess made |
+## 5. Guardrail ownership (code, not prompts)
 
-You can also force a hallucinated-SKU demo by temporarily editing
-`agents/product_matching.py` to hardcode a fake SKU string and watching the
-deterministic validator reject it and substitute a real one — this is one
-of the strongest moments to show in a hackathon demo.
+| Rule | Enforced by |
+| --- | --- |
+| SKU must exist in catalogue | `catalog.validate_skus` tool + `catalog.search` backstop |
+| Discount ≤ policy max (+bundle bonus) | `policy.clamp_discount` tool — overrides any model number |
+| Quote always carries disclaimer, never binding | `quote.finalize` tool |
+| Dealer must exist + stock SKU | `dealer.rank` tool on provided data only |
+| Warranty/legal/safety/recall → escalate only | `security.scan_input` (L1) + hard veto in `compliance_critic` |
+| **Prompt injection cannot reach a model** | `security.scan_input` BLOCKED short-circuits the pipeline pre-model |
+| **PII never sent to external model** | `pii.redact` before every untrusted-text model call |
+| **Layer-2 LLM cannot un-block Layer-1** | precedence logic in `hooks.security_sentinel_check` |
+| Malformed model output never flows downstream | `hooks.lint_and_repair` → `_error` → deterministic fallback |
+| LLM spend is bounded per lead | `model_router` call budget + circuit breaker |
+| API abuse is bounded | token-bucket rate limit + 256 KB body cap + security headers |
 
-## 6. Where to go next
+## 6. Documentation
 
-- `docs/PROMPTS.md` — every prompt, and the reasoning behind its wording.
-- `docs/UI_CONNECTORS.md` — full REST API contracts, and step-by-step
-  instructions for replacing the placeholder dashboard with your own
-  Figma design.
-- Swap `SESSIONS` / `LEAD_RESULTS` in `app.py` for a real database
-  (Postgres/SQLite) before using this beyond a demo.
-- Add authentication before exposing `/api/*` outside your own machine —
-  there is none right now.
+- `docs/HARNESS.md` — every harness component, mechanism by mechanism
+- `docs/SECURITY.md` — threat model, layered defenses, security demo script
+- `docs/PROMPTS.md` — why each prompt is written the way it is
+- `docs/UI_CONNECTORS.md` — API contracts + Figma wiring

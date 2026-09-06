@@ -1,39 +1,22 @@
 import json
-from agents.gemini_client import call_gemini_json
-from agents import prompts
+
+from agents import hooks, prompts
+from agents.tools import invoke_tool
 
 
-def _rule_based_match(profile: dict, catalog: list) -> list:
-    """Deterministic fallback matcher used when the LLM hallucinates a SKU
-    or fails outright. Filters the real catalogue by vehicle type, usage tag
-    and budget so we always have a safe, real answer to fall back on."""
-    vehicle_type = profile.get("vehicle_type")
-    usage = profile.get("usage")
-    budget = profile.get("budget")
-
-    candidates = catalog
-    if vehicle_type:
-        filtered = [c for c in candidates if vehicle_type in c.get("vehicle_types", [])]
-        candidates = filtered or candidates
-    if usage:
-        filtered = [c for c in candidates if usage in c.get("usage_tags", [])]
-        candidates = filtered or candidates
-    if budget:
-        within_budget = [c for c in candidates if c["price"] <= budget * 1.15]
-        candidates = within_budget or candidates
-
-    candidates = sorted(candidates, key=lambda c: abs(c["price"] - (budget or c["price"])))
-    return candidates
-
-
-def run(profile: dict, catalog: list) -> dict:
+def run(profile: dict, catalog: list, ctx: dict = None) -> dict:
+    ctx = ctx or {}
     catalog_ids = {c["id"] for c in catalog}
+    tool_manifest = json.dumps([
+        {"name": "catalog.search", "when": "ground-truth ranking of candidates"},
+        {"name": "catalog.validate_skus", "when": "verify any SKU you propose"},
+    ])
 
-    user_prompt = prompts.PRODUCT_MATCHING_USER_TEMPLATE.format(
-        profile_json=json.dumps(profile),
-        catalog_json=json.dumps(catalog),
+    result = hooks.guarded_call(
+        "product_matching", prompts.PRODUCT_MATCHING_USER_TEMPLATE, ctx=ctx,
+        payloads={"profile_json": profile, "catalog_json": catalog},
+        system_prompt=prompts.PRODUCT_MATCHING_SYSTEM.format(tool_manifest=tool_manifest),
     )
-    result = call_gemini_json(prompts.PRODUCT_MATCHING_SYSTEM, user_prompt)
 
     llm_failed = "_error" in result
     sku = None if llm_failed else result.get("recommended_sku")
@@ -41,32 +24,34 @@ def run(profile: dict, catalog: list) -> dict:
     reason = result.get("reason", "")
     confidence = result.get("confidence", 0.0) if not llm_failed else 0.0
 
-    # --- Deterministic guardrail: the model may ONLY return real SKUs ---
-    hallucinated = bool(sku) and sku not in catalog_ids
-    sku_validated = bool(sku) and sku in catalog_ids
+    # --- Tool-backed validation: model may ONLY return real SKUs ---
+    check = invoke_tool("catalog.validate_skus", "product_matching",
+                        {"skus": [s for s in [sku] + alternatives if s], "catalog": catalog},
+                        trace=ctx.get("trace"))["result"]
+    hallucinated = bool(check["hallucinated"])
+    sku_validated = bool(sku) and sku in check["valid"]
 
     if hallucinated or (not sku_validated):
-        fallback = _rule_based_match(profile, catalog)
+        # Deterministic backstop via catalog.search tool.
+        fallback = invoke_tool("catalog.search", "product_matching",
+                               {"profile": profile, "catalog": catalog},
+                               trace=ctx.get("trace"))["result"]
         if fallback:
             best = fallback[0]
             sku = best["id"]
             alternatives = [c["id"] for c in fallback[1:3]]
             reason = (
-                f"Deterministic catalogue matcher selected {best['model']} "
-                f"({best['size']}) based on vehicle type, usage and budget."
+                f"Deterministic matcher selected {best['model']} ({best['size']}) by vehicle/usage/budget."
                 if not hallucinated else
-                f"Model proposed a SKU not present in the catalogue; rejected and "
-                f"replaced with deterministic match: {best['model']} ({best['size']})."
+                f"Model proposed non-catalogue SKU {check['hallucinated'][0]}; rejected by validator and replaced with {best['model']} ({best['size']})."
             )
             confidence = 0.6
             no_match = False
         else:
-            sku = None
-            alternatives = []
+            sku, alternatives, confidence, no_match = None, [], 0.0, True
             reason = "No catalogue product reasonably matches this lead's requirements."
-            confidence = 0.0
-            no_match = True
     else:
+        alternatives = [a for a in alternatives if a in check["valid"]]
         no_match = False
 
     return {

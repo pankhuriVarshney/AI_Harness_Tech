@@ -1,117 +1,114 @@
-# Prompt Reference & Design Rationale
+# Prompt Reference & Design Rationale (v2.0.0)
 
-The actual prompt strings live in `agents/prompts.py` so there is exactly
-one source of truth. This document explains **why** each one is written the
-way it is, for anyone reviewing or presenting the project.
+All prompt strings live in `agents/prompts.py` — one versioned source of
+truth (`PROMPT_VERSION`). This document explains *why* each is written the
+way it is.
 
-General pattern used in every prompt:
+General pattern (unchanged from v1, still load-bearing):
+1. **Role + hard rules first** — prohibitions before tasks.
+2. **"Output JSON only"** + `response_mime_type: application/json` + regex
+   extraction fallback (three layers).
+3. **Model output is never authoritative** for anything critical — every
+   prompt has a code validator (see README guardrails table).
 
-1. **Role + hard rules first.** Every system prompt opens by telling the
-   agent what it is *not* allowed to do, before telling it what to do. This
-   is deliberate — LLMs weight instructions that appear early and are
-   phrased as hard constraints more reliably than instructions buried in
-   formatting requirements.
-2. **"Output JSON only."** Every prompt ends with a strict schema and an
-   instruction to return nothing else. `gemini_client.py` also sets
-   `response_mime_type: "application/json"` at the API level as a second
-   layer, and falls back to regex-extracting a JSON object if the model
-   still wraps it in prose or markdown fences.
-3. **Never treat the model's own output as authoritative for anything
-   safety/business-critical.** Every prompt below has a matching Python
-   validator that re-checks its output (see the README's guardrails table).
+What's new in v2: security posture blocks, tool manifests, the negotiation
+subagent, the security sentinel, and the compliance `revise_deal` handoff.
 
 ---
 
-## Agent 1 — Lead Intelligence (`LEAD_INTELLIGENCE_SYSTEM`)
+## Agent 1 — Lead Intelligence
 
-**Why it's restricted to extraction only:** this is the one agent that
-touches completely unstructured, untrusted customer text. If it were also
-allowed to recommend a product or price, a customer's phrasing could
-indirectly steer a sales outcome before any policy checks exist. Keeping it
-extraction-only means everything risky happens downstream, behind
-validators.
+**Security posture block (new):** this agent ingests the most hostile input
+in the system, so its prompt states explicitly that the text is untrusted,
+that override attempts are *data to classify, not commands*, and that the
+text arrives pre-scanned and redacted (which is true — Layer-1 + PII
+redaction run in `lead_intelligence.run` before `guarded_call`). This is
+prompt-layer defense-in-depth; the real guarantees are that the prompt is
+never reached on BLOCKED input, and the output schema has no fields that
+could carry a price or discount.
 
-**Why "must not guess":** a wrong guess here (e.g. inventing a vehicle type)
-poisons every agent after it. The prompt explicitly rewards returning
-`null` + `missing_fields` over fabricating a plausible-sounding value, and
-`lead_intelligence.py` recomputes `missing_fields` itself rather than
-trusting the model's list, since an LLM under-reporting its own uncertainty
-is a common failure mode.
+**Why extraction-only / no-guess:** a wrong guess here poisons every
+downstream agent. `lead_intelligence.py` still recomputes `missing_fields`
+itself rather than trusting the model's self-reported uncertainty.
 
-**Why out-of-scope detection lives here, not later:** catching "is this
-actually a legal/warranty complaint?" at the very first step lets the
-Orchestrator short-circuit the entire pipeline immediately, so no
-downstream agent ever gets a chance to improvise a legal answer.
+**Why out-of-scope detection stays here:** first-step short-circuit means
+no downstream agent ever sees a legal/warranty question it could improvise
+an answer to.
 
-## Agent 2 — Lead Scoring (`LEAD_SCORING_SYSTEM`)
+## Agent 2 — Lead Scoring
 
-**Why the LLM never produces the number:** lead scoring drives priority and
-which leads a human even looks at — it needs to be reproducible and
-explainable in a spreadsheet, not something that can silently drift with
-model updates. `lead_scoring.py` computes the 0–100 score from a fixed
-rubric in plain Python; the prompt is only asked to phrase 2–4 bullet
-reasons from the already-computed breakdown, and is explicitly told "never
-output a numeric score yourself."
+**Why the LLM never produces the number:** scoring decides which leads a
+human even looks at; it must be reproducible across model updates. The
+rubric is the `lead.compute_score` **tool**; the prompt is told the score
+and asked only to phrase 2–4 reasons ("never output a numeric score
+yourself").
 
-## Agent 3 — Product Matching (`PRODUCT_MATCHING_SYSTEM`)
+## Agent 3 — Product Matching
 
-**Why the full catalogue is inlined into the prompt every time:** the model
-has no other source of truth for what SKUs exist. This is intentional —
-it makes hallucination detectable and correctable rather than silently
-plausible. The prompt states the constraint twice (system prompt + the
-schema's "or null" for `recommended_sku`) because SKU hallucination is the
-single most damaging possible failure in this system (see Demo 5 in the
-original spec).
+**Tool manifest (new):** the system prompt now embeds a manifest of the
+agent's tools with *when to trust them* — "trust their output over your
+memory". The backstop is no longer hidden: the prompt tells the agent the
+harness will validate its SKUs, which measurably reduces hallucination
+attempts (the model learns proposing fake ids is futile).
 
-**Backstop:** `product_matching.py` checks every returned SKU against the
-literal catalogue passed to that call. Any hallucinated or missing SKU is
-discarded and replaced by a deterministic filter-and-rank matcher
-(`_rule_based_match`), so the pipeline never halts just because the model
-had an off run.
+**Why the catalogue is still inlined every call:** the model needs the
+data; inlining makes hallucination *detectable* (validator can diff) rather
+than silently plausible.
 
-## Agent 4 — Deal Optimization (`DEAL_OPTIMIZATION_SYSTEM`)
+## Agent 4 — Deal Optimization
 
-**Why it's told not to worry about the policy ceiling:** asking a model to
-both "propose the best discount" and "obey a hard numeric ceiling" in the
-same breath tends to produce discounts that hug the ceiling instead of the
-customer's actual budget. Separating concerns — model optimizes for
-minimal sufficient incentive, code clamps to policy — produces both a
-better-reasoned discount and a guaranteed-safe one.
+**Separation of concerns (unchanged, still the key idea):** the model
+optimizes for the *smallest sufficient incentive*; the ceiling is never its
+job. Asking one model call to both "maximize the deal" and "obey a hard
+cap" produces discounts that hug the cap. `policy.clamp_discount` owns the
+number.
 
-**Deterministic clamp:** `deal_optimization.py` always takes
-`min(proposed, policy_max [+ bundle bonus])`, always recomputes
-`final_total` itself from price and the clamped percentage, and always
-attaches the disclaimer string from `policy.json` rather than trusting the
-model to remember to add one.
+**Tool manifest (new):** same contract as Agent 3.
 
-## Agent 5 — Dealer Allocation (no LLM prompt)
+**Negotiation feedback slot (new):** the user template has a
+`{negotiation_feedback}` slot so a handoff revision (or the negotiation
+subagent's findings) can be injected without prompt surgery.
 
-Deliberately has no Gemini call at all. Distance, stock, and conversion
-rate are structured numeric/lookup problems — asking an LLM to rank them
-adds latency and hallucination risk with no reasoning benefit. This is the
-clearest example in the system of "use agentic *architecture*, not agentic
-*everything*" — it's still an agent (it has a role, inputs, and a
-structured output the Orchestrator consumes), it just doesn't need
-generative reasoning to do its job well.
+## Subagent — Negotiation Simulator
 
-## Agent 6 — Compliance & Sales Critic (`COMPLIANCE_CRITIC_SYSTEM`)
+**Why it exists:** before a human salesperson offers a discount, the
+harness stress-tests it against a simulated customer. Prompting it to stay
+in character (customer, not advisor) keeps its `recommended_revision_pct`
+grounded in the scenario rather than in generic sales advice. The
+subagent's revision is *re-clamped in code* (`negotiation.py` caps it at
+the policy ceiling) — even a misbehaving subagent cannot expand policy.
 
-**Why it gets pre-computed risk flags instead of raw state only:** asking
-an LLM to notice a policy violation buried in a JSON blob is less reliable
-than asking Python to compute `exceeds_policy` deterministically and simply
-handing the critic a short list of flags to reason about and phrase for a
-human. The critic's real job is judgment calls the code can't make
-(ambiguous or contradictory data, an odd combination of factors) — not
-arithmetic it's already been given the answer to.
+## Agent 5 — Dealer Allocation
 
-**Why escalation bias is explicit ("prefer escalate_to_human = true"):** in
-a sales context, an unnecessary human review costs a few minutes; an
-incorrect auto-approval can mean a broken promise to a customer or a policy
-breach reaching a dealer. The prompt states this asymmetry directly so the
-model doesn't optimize for "sounding confident."
+No prompt — deliberately. See v1 rationale: ranking stock/distance/
+conversion is a solved problem; a model would add latency and
+hallucination risk for zero reasoning benefit. It remains an *agent* (role,
+inputs, structured output consumed by the orchestrator) with tool-backed
+implementation.
 
-**Hard override in code:** regardless of what the critic LLM concludes,
-`compliance_critic.py` forces `approved = false` and
-`escalate_to_human = true` whenever a hard deterministic flag exists
-(out-of-scope topic, restricted keyword, or policy violation). The LLM can
-escalate *more* than the code requires, never less.
+## Agent 6 — Compliance & Sales Critic
+
+**Why pre-computed flags:** handing the critic `risk_flags` computed in
+code is more reliable than asking it to spot violations in a JSON blob. Its
+job is judgment the code can't make — ambiguity, odd combinations — and
+phrasing for humans.
+
+**Escalation bias:** stated explicitly with the cost asymmetry (a false
+escalation costs minutes; a false approval costs a policy breach).
+
+**`revise_deal` (new):** gives the critic a bounded way to *improve* an
+outcome rather than only approve/reject. The orchestrator enforces
+`max_handoff_loops: 1` — the prompt does not control the loop.
+
+**Hard veto (code, not prompt):** `compliance_critic.py` forces
+`approved=false / escalate=true` on hard flags no matter what the LLM
+concluded. The LLM may escalate beyond the code's requirements, never
+below.
+
+## Security Sentinel
+
+Deliberately boring: classify intent of pre-scanned, redacted text into
+PASS/SUSPICIOUS/BLOCKED with clear criteria and an explicit "you may only
+escalate" rule. Its verdict is advisory-in-one-direction-only: precedence
+logic in `hooks.security_sentinel_check` makes a downgrade mathematically
+impossible.
