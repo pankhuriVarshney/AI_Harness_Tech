@@ -1,0 +1,16 @@
+{
+  "skus": [
+    {"id": "MI-PS5-205-55R16", "model": "Pilot Sport 5", "category": "performance", "size": "205/55R16", "usage": ["city", "highway"], "price_inr": 6800, "stock_note": "high"},
+    {"id": "MI-PS5-225-45R17", "model": "Pilot Sport 5", "category": "performance", "size": "225/45R17", "usage": ["highway", "spirited"], "price_inr": 8900, "stock_note": "medium"},
+    {"id": "MI-PRIM4-185-65R15", "model": "Primacy 4", "category": "comfort-touring", "size": "185/65R15", "usage": ["city", "daily"], "price_inr": 5200, "stock_note": "high"},
+    {"id": "MI-PRIM4-195-55R16", "model": "Primacy 4", "category": "comfort-touring", "size": "195/55R16", "usage": ["city", "highway", "daily"], "price_inr": 6100, "stock_note": "high"},
+    {"id": "MI-ENERGY-XM2-165-80R14", "model": "Energy XM2", "category": "economy", "size": "165/80R14", "usage": ["city", "budget"], "price_inr": 3400, "stock_note": "high"},
+    {"id": "MI-ENERGY-XM2-175-70R14", "model": "Energy XM2", "category": "economy", "size": "175/70R14", "usage": ["city", "budget"], "price_inr": 3700, "stock_note": "medium"},
+    {"id": "MI-LTX-FORCE-235-65R17", "model": "LTX Force", "category": "suv-highway", "size": "235/65R17", "usage": ["highway", "suv"], "price_inr": 9800, "stock_note": "medium"},
+    {"id": "MI-LTX-TRAIL-265-70R16", "model": "LTX Trail", "category": "suv-offroad", "size": "265/70R16", "usage": ["off-road", "suv"], "price_inr": 11200, "stock_note": "low"},
+    {"id": "MI-AGILIS-195-70R15C", "model": "Agilis", "category": "commercial-van", "size": "195/70R15C", "usage": ["commercial", "highway"], "price_inr": 7300, "stock_note": "medium"},
+    {"id": "MI-CROSSCLIMATE2-205-60R16", "model": "CrossClimate 2", "category": "all-season", "size": "205/60R16", "usage": ["city", "highway", "monsoon"], "price_inr": 7500, "stock_note": "high"},
+    {"id": "MI-PILOT4S-245-40R18", "model": "Pilot Sport 4S", "category": "performance", "size": "245/40R18", "usage": ["highway", "spirited"], "price_inr": 13500, "stock_note": "low"},
+    {"id": "MI-PRIM4-205-65R16", "model": "Primacy 4", "category": "comfort-touring", "size": "205/65R16", "usage": ["city", "highway", "daily"], "price_inr": 6400, "stock_note": "high"}
+  ]
+}

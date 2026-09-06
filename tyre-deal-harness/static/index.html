@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Tyre Deal Harness — debug shell (replace with Figma UI)</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- FIGMA_CONNECTOR: header
+     Replace this whole <header> with your Figma header/nav component.
+     No data binding needed here - it's static chrome. -->
+<header>
+  <h1>Tyre Deal Harness</h1>
+  <p class="subtitle">Debug shell — this screen exists to prove the harness works. Swap it for the Figma UI whenever it's ready; the API contract underneath doesn't change.</p>
+</header>
+
+<main>
+  <!-- FIGMA_CONNECTOR: chat-window
+       Bind: POST /api/chat  { session_id, message, lat, lng } -> { reply, escalate_to_human, deal, distributors }
+       Show `reply` as the assistant bubble. If escalate_to_human is true,
+       render an "connect me to a person" affordance instead of just text. -->
+  <section id="chat-window" aria-label="chat">
+    <div id="messages"></div>
+    <form id="chat-form">
+      <input id="chat-input" type="text" placeholder="Ask about tyres, e.g. 'Need 4 tyres for my Innova, mostly highway, size 235/65R17'" autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+  </section>
+
+  <!-- FIGMA_CONNECTOR: agent-trace-panel
+       Bind: the `trace` array from /api/chat response.
+       This is the "show at least one edge case / error-handling scenario"
+       panel for the demo - each item is one agent's raw output. Keep this
+       visible during the hackathon demo even if the final product hides it
+       behind a "developer mode" toggle. -->
+  <aside id="trace-panel" aria-label="agent trace">
+    <h2>Agent trace (demo view)</h2>
+    <div id="trace-content"><p class="muted">Send a message to see each agent's output.</p></div>
+  </aside>
+</main>
+
+<script src="script.js"></script>
+</body>
+</html>
