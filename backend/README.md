@@ -1,4 +1,4 @@
-# Michelin Converge v2 — Agentic Lead-to-Dealer Conversion Harness
+# Agentic AI Harness
 
 An agentic AI harness that turns a raw, messy (possibly hostile) customer
 lead into a validated, policy-compliant sales action — scored, matched,
