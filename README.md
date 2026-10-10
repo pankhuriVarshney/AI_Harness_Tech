@@ -5,19 +5,72 @@ lead into a validated, policy-compliant sales action — scored, matched,
 priced within policy, dealer-allocated, independently reviewed, and, when
 anything is off, cleanly escalated to a human.
 
-The business
-flow is the same; everything around the LLM calls is now real harness
-machinery: a tool/skill registry (MCP-style), model routing with fallback
-chains and circuit breakers, a hook pipeline (compaction / lint-repair /
-security sentinel), subagent spawning, bounded handoff loops, and a
-multi-layer security harness. See `docs/HARNESS.md` for the full tour.
+## 1. What This Is
+
+This project is an **agentic AI harness** — not a chatbot — that turns a raw, messy customer lead into a validated, policy-compliant sales action. It receives lead information, scores purchase intent, recommends a real tyre from the catalogue, optimizes a compliant discount, selects the best distributor, and decides whether a human sales rep should be looped in.
+
+Multiple narrowly scoped AI agents do the reasoning. Deterministic code enforces the business rules the agents are never allowed to override. An Orchestrator agent coordinates the whole thing and branches based on what each agent actually returns — it does not run agents in a blind fixed sequence.
+
+**Core question the project answers:**
+> Can an agentic AI harness reliably decide which leads deserve attention, what should be offered, which dealer should handle it, and when a human must take over — while never breaking policy, inventing data, or answering questions it isn't allowed to answer?
+
+---
+
+## 2. Why "Harness," Not "Chatbot"
+
+This distinction is the spine of the project, so it's worth stating plainly.
+
+| System | What it does |
+|---|---|
+| **CRM** | Stores leads. Makes no decisions. |
+| **Chatbot** | Talks to leads. Each reply is a fresh, memoryless generation — no persistent state, no validation. |
+| **Recommendation engine** | Recommends one thing (a product), in isolation, with no pricing, allocation, or compliance logic attached. |
+| **Michelin Converge** | Chains multiple bounded decisions together, validates each one against real business rules, maintains state across the whole flow, and knows when to stop and escalate to a human. |
+
+A chatbot optimizes for *a plausible-sounding response*. Michelin Converge optimizes for *a reliable business decision*. That distinction pre-empts the most obvious critique a reviewer will have — "why not just build something simpler?" — by showing exactly what "simpler" gives up: guardrails against hallucinated SKUs, policy-breaking discounts, and answering questions (legal/warranty) the system has no business answering.
+
+```
+CHATBOT                          MICHELIN CONVERGE
+
+Input                            Input
+  ↓                                ↓
+LLM                              Agent → Structured State
+  ↓                                ↓
+Response                        Agent → Validation
+                                   ↓
+                                 Agent → Business Rules
+                                   ↓
+                                 Agent → Critic
+                                   ↓
+                                 Orchestrator → Decision
+                                   ↓
+                                 Human Escalation if Necessary
+```
+
+---
+
+## 3. End-to-End Flow (User's Side)
+
+The end user is a **Sales team member**, working from a dashboard — not the customer, and not a chat window.
+
+1. **A lead arrives.** Raw, unstructured info lands in the queue (e.g. "Rahul, Hyundai Creta, wants highway tyres, budget ~₹30k, Pune"). The user does nothing yet.
+2. **The harness processes it in the background.** The agent chain runs: extract → score → match product → optimize offer → allocate dealer → compliance check. The user doesn't watch this happen live; they see the finished result land on the dashboard, with an option to inspect the full trace.
+3. **User opens the Sales Ops Dashboard.** A pipeline overview shows how many leads are High / Medium / Low priority, and how many are sitting in Human Review.
+4. **User opens a specific lead.** Everything is pre-decided: lead score, recommended tyre, recommended discount (already policy-checked), recommended dealer (with stock/distance), and a one-line action — e.g. `CONTACT NOW`.
+5. **User acts.** Three buttons: **View Agent Trace** (see how the decision was reached), **Simulate Offer** (see below), **Assign to Sales**.
+6. **Edge cases surface as flags, not crashes.** Ambiguous leads, over-policy discount requests, out-of-catalogue asks, and legal/warranty questions land in Human Review with a stated reason — never a fabricated answer.
+7. **Optional what-if exploration** before finalizing (see Section 4).
+
+The net effect: the rep's job shifts from *"figure out what to offer this lead"* to *"review, trust or override, and click assign"* — with full visibility into why the system decided what it did.
+
+---
 
 ---
 
 ## 1. Repo layout
 
 ```text
-michelin-converge/
+app/
 ├── agents/
 │   ├── gemini_client.py     # low-level Gemini transport (JSON extraction)
 │   ├── model_router.py      # MODEL ROUTING: tiers, fallback chain, per-lead
@@ -68,7 +121,7 @@ michelin-converge/
 ## 3. Setup
 
 ```bash
-cd michelin-converge
+cd app
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # add your GEMINI_API_KEY
